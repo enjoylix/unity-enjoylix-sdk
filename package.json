@@ -1,0 +1,31 @@
+{
+  "name": "com.enjoylix.sdk",
+  "version": "2.0.15",
+  "displayName": "Enjoylix SDK",
+  "description": "SDK for Enjoylix. Contains Authentication, Attribution, Age verification, Payment Systems. For complete overview refer to our GitBook",
+  "unity": "6000.1",
+  "changelogUrl": "https://enjoylix.gitbook.io/docs/client-documentation/migration-changelog#v2.0.15",
+  "keywords": [
+    "enjoylix",
+    "login",
+    "attribution",
+    "payment",
+    "age verification"
+  ],
+  "samples": [
+    {
+      "displayName": "EnjoylixDemo",
+      "description": "This sample demonstrates the core capabilities of the Enjoylix SDK, including Authentication flows (Guest, OpenID, Linking), Payment and Attribution event tracking.",
+      "path": "Samples~/EnjoylixDemo"
+    }
+  ],
+  "dependencies": {
+    "com.unity.textmeshpro": "3.0.7"
+  },
+  "author": {
+    "name": "Pochemu LTD",
+    "email": "info@pochemultd.com",
+    "url": "https://pochemultd.com"
+  },
+  "license": "ISC"
+}
