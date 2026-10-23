@@ -404,6 +404,7 @@ catch (Exception e)
 | :---- | :---- |
 | `UserDismissedException` | User closed the browser without completing the flow (mobile, Editor, and WebGL) |
 | `PopupBlockedException` | Browser blocked the popup window before it could open (WebGL) |
+| `UserCancelledException` | User declined the game's `EnjoylixConfirmOpen` confirmation, the window was never opened (WebGL) |
 | `OperationCanceledException` | Timeout elapsed or `CancellationToken` was canceled |
 | `EnjoylixApiException` | HTTP error from the backend; exposes `StatusCode`, raw body, and optional `ValidationError` |
 
@@ -416,3 +417,5 @@ sdk.OnPopupBlocked += url =>
     // Show UI asking user to allow popups
 };
 ```
+
+To let the user open the window from a confirmation instead (Safari), define `window.EnjoylixConfirmOpen(request, proceed, cancel)` on the game page — see "Popup Blocking" in `enjoylix_sdk_docs.md`.

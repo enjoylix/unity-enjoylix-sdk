@@ -12,6 +12,11 @@ namespace EnjoylixSDK.Common
 	{
 		private const string LOG_TAG = "[WebGlPopupHandler]";
 		private const int ClosePollIntervalMs = 500;
+
+		// Must match WindowState in EnjoylixWindowExternalServiceUtils.jspre.
+		private const int WindowStateOpen = 0;
+		private const int WindowStateBlocked = 2;
+		private const int WindowStateCancelled = 3;
 		private static TaskCompletionSource<string> _messageTaskSource;
 
 #if (UNITY_WEBGL || UNITY_WEBPLAYER) && !UNITY_EDITOR
@@ -142,6 +147,22 @@ namespace EnjoylixSDK.Common
 					return messageTask.GetAwaiter().GetResult();
 				}
 
+				var closeState = closeTask.Status == TaskStatus.RanToCompletion ? closeTask.Result : WindowStateOpen;
+
+				// window.open was blocked even after the game's EnjoylixConfirmOpen confirmation.
+				if (closeState == WindowStateBlocked)
+				{
+					Debug.LogWarning($"{LOG_TAG} Popup was blocked after confirmation.");
+					throw new PopupBlockedException(url);
+				}
+
+				// The user declined the game's EnjoylixConfirmOpen confirmation; the window was never opened.
+				if (closeState == WindowStateCancelled)
+				{
+					Debug.LogWarning($"{LOG_TAG} User cancelled the popup confirmation.");
+					throw new UserCancelledException();
+				}
+
 				Debug.LogWarning($"{LOG_TAG} Popup window was closed before message was received.");
 
 				var exception = new UserDismissedException();
@@ -168,7 +189,7 @@ namespace EnjoylixSDK.Common
 			if (_windowId < 0)
 				return true;
 
-			return Enjoylix_IsWindowClosed(_windowId) == 1;
+			return Enjoylix_IsWindowClosed(_windowId) != WindowStateOpen;
 #else
 			return true;
 #endif
@@ -196,20 +217,25 @@ namespace EnjoylixSDK.Common
 #endif
 		}
 
+		// Returns the final window state: closed, blocked after confirmation or confirmation cancelled.
 #pragma warning disable CS1998
-		private async Task WaitForWindowCloseAsync(int windowId, CancellationToken ct)
+		private async Task<int> WaitForWindowCloseAsync(int windowId, CancellationToken ct)
 #pragma warning restore CS1998
 		{
 #if (UNITY_WEBGL || UNITY_WEBPLAYER) && !UNITY_EDITOR
 			Debug.Log($"{LOG_TAG} Start waiting for window close. windowId={windowId}");
 
-			while (Enjoylix_IsWindowClosed(windowId) != 1)
+			int state;
+			while ((state = Enjoylix_IsWindowClosed(windowId)) == WindowStateOpen)
 			{
 				ct.ThrowIfCancellationRequested();
 				await SdkDelayRunner.Instance.DelayAsync(ClosePollIntervalMs, ct);
 			}
 
-			Debug.Log($"{LOG_TAG} Window closed detected. windowId={windowId}");
+			Debug.Log($"{LOG_TAG} Window closed detected. windowId={windowId}, state={state}");
+			return state;
+#else
+			return WindowStateOpen;
 #endif
 		}
 	}

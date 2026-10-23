@@ -3,13 +3,16 @@
 
     console.log(`${LOG_TAG} Initializing...`);
 
+    // Must match WindowState* constants in WebGlPopupHandler.cs.
+    const WindowState = { Open: 0, Closed: 1, Blocked: 2, Cancelled: 3 };
+
     const WindowData = (function () {
         let windowIdCounter = 0;
         const windows = new Map();
 
         function addWindow(win) {
             const id = windowIdCounter++;
-            windows.set(id, { instance: win, listeners: [] });
+            windows.set(id, { instance: win, listeners: [], pending: false, finalState: null });
 
             console.log(`${LOG_TAG} addWindow -> id=${id}`, {
                 closed: !!(win && win.closed),
@@ -17,6 +20,51 @@
             });
 
             return id;
+        }
+
+        // Reserves an id for a window that will be opened later from a user gesture
+        // (see EnjoylixConfirmOpen). Reported as open until resolved or deleted.
+        function addPendingWindow() {
+            const id = windowIdCounter++;
+            windows.set(id, { instance: null, listeners: [], pending: true, finalState: null });
+
+            console.log(`${LOG_TAG} addPendingWindow -> id=${id}, totalWindows=${windows.size}`);
+
+            return id;
+        }
+
+        function isPending(id) {
+            const entry = windows.get(id);
+            return !!(entry && entry.pending);
+        }
+
+        // win === null means window.open was blocked again; reported as Blocked once.
+        function resolvePendingWindow(id, win) {
+            const entry = windows.get(id);
+            if (!entry || !entry.pending) {
+                console.warn(`${LOG_TAG} resolvePendingWindow -> id=${id} is not pending`);
+                return;
+            }
+
+            entry.pending = false;
+            entry.instance = win;
+            entry.finalState = win ? null : WindowState.Blocked;
+
+            console.log(`${LOG_TAG} resolvePendingWindow -> id=${id}`, { blocked: !win });
+        }
+
+        // User declined the game's confirmation; reported as Cancelled once.
+        function cancelPendingWindow(id) {
+            const entry = windows.get(id);
+            if (!entry || !entry.pending) {
+                console.warn(`${LOG_TAG} cancelPendingWindow -> id=${id} is not pending`);
+                return;
+            }
+
+            entry.pending = false;
+            entry.finalState = WindowState.Cancelled;
+
+            console.log(`${LOG_TAG} cancelPendingWindow -> id=${id}`);
         }
 
         function getWindow(id) {
@@ -69,23 +117,40 @@
             }
         }
 
-        function checkWindowClosed(id) {
-            const win = getWindow(id);
+        function getWindowState(id) {
+            const entry = windows.get(id);
+
+            if (entry && entry.pending) {
+                console.log(`${LOG_TAG} getWindowState -> id=${id}, waiting for user confirmation`);
+                return WindowState.Open;
+            }
+
+            if (entry && entry.finalState !== null) {
+                const finalState = entry.finalState;
+                console.warn(`${LOG_TAG} getWindowState -> id=${id}, confirmation ended`, {
+                    blocked: finalState === WindowState.Blocked,
+                    cancelled: finalState === WindowState.Cancelled
+                });
+                deleteWindowWithListeners(id);
+                return finalState;
+            }
+
+            const win = entry ? entry.instance : null;
 
             if (!win) {
-                console.warn(`${LOG_TAG} checkWindowClosed -> id=${id}, window not found, treat as closed`);
+                console.warn(`${LOG_TAG} getWindowState -> id=${id}, window not found, treat as closed`);
                 deleteWindowWithListeners(id);
-                return true;
+                return WindowState.Closed;
             }
 
             if (win.closed) {
-                console.log(`${LOG_TAG} checkWindowClosed -> id=${id}, window is closed`);
+                console.log(`${LOG_TAG} getWindowState -> id=${id}, window is closed`);
                 deleteWindowWithListeners(id);
-                return true;
+                return WindowState.Closed;
             }
 
-            console.log(`${LOG_TAG} checkWindowClosed -> id=${id}, window still open`);
-            return false;
+            console.log(`${LOG_TAG} getWindowState -> id=${id}, window still open`);
+            return WindowState.Open;
         }
 
         function debugDump() {
@@ -98,15 +163,20 @@
 
         return {
             addWindow,
+            addPendingWindow,
+            isPending,
+            resolvePendingWindow,
+            cancelPendingWindow,
             getWindow,
             addListener,
             deleteWindowWithListeners,
-            checkWindowClosed,
+            getWindowState,
             debugDump
         };
     })();
 
     const api = {
+        WindowState: WindowState,
         WindowData: WindowData,
 
         CloseWindow: function (windowId) {

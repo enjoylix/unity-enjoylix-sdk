@@ -72,6 +72,8 @@ namespace EnjoylixSDK.Purchase
                 Debug.LogWarning($"[PurchaseService] Popup was blocked for url {e.Url}");
                 return null;
             }
+            // UserCancelledException (WebGL confirmation declined) is deliberately not caught:
+            // the payment page was never opened, so there is nothing to reconcile.
             catch (UserDismissedException)
             {
                 var reconciled = await TryReconcileAsync(authAccessToken, req);

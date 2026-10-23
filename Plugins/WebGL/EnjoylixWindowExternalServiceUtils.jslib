@@ -113,23 +113,33 @@
                 return -1;
             }
 
-            const win = window.open(url, windowName, windowSize);
+            const utils = window.EnjoylixWebExternalServiceUtils;
+            let win = window.open(url, windowName, windowSize);
+            let windowId;
 
-            if (!win) {
+            // Safari blocks window.open outside of a DOM user gesture. If the game page
+            // defines window.EnjoylixConfirmOpen, it shows its own confirmation UI and calls
+            // proceed() synchronously from its click handler so the open runs inside a gesture.
+            const confirmOpen = window.EnjoylixConfirmOpen;
+            const needsConfirm = !win;
+
+            if (win) {
+                console.log(`${LOG_TAG} window opened successfully`, {
+                    closed: !!win.closed
+                });
+                windowId = utils.WindowData.addWindow(win);
+            } else if (typeof confirmOpen === "function") {
+                console.warn(`${LOG_TAG} window.open was blocked, requesting confirmation via EnjoylixConfirmOpen`);
+                windowId = utils.WindowData.addPendingWindow();
+            } else {
                 console.error(`${LOG_TAG} window.open failed or was blocked`);
                 return -1;
             }
 
-            console.log(`${LOG_TAG} window opened successfully`, {
-                closed: !!win.closed
-            });
-
-            const utils = window.EnjoylixWebExternalServiceUtils;
-            const windowId = utils.WindowData.addWindow(win);
-
             const listener = function (event) {
                 try {
-                    if (event.source !== win) {
+                    // win is null while waiting for confirmation; never match a null event.source.
+                    if (!win || event.source !== win) {
                         console.log(`${LOG_TAG} ignored message from another window`, {
                             windowId: windowId,
                             origin: event.origin,
@@ -208,6 +218,40 @@
             utils.WindowData.addListener(windowId, listener);
             console.log(`${LOG_TAG} listener added -> id=${windowId}`);
 
+            if (needsConfirm) {
+                // Both are one-shot and ignored once the flow has ended (cancel, timeout, close).
+                const proceed = function () {
+                    if (!utils.WindowData.isPending(windowId)) {
+                        console.warn(`${LOG_TAG} proceed ignored, window is not pending -> id=${windowId}`);
+                        return;
+                    }
+
+                    win = window.open(url, windowName, windowSize);
+                    utils.WindowData.resolvePendingWindow(windowId, win);
+
+                    if (!win) {
+                        console.error(`${LOG_TAG} window.open was blocked after confirmation -> id=${windowId}`);
+                    }
+                };
+
+                const cancel = function () {
+                    if (!utils.WindowData.isPending(windowId)) {
+                        console.warn(`${LOG_TAG} cancel ignored, window is not pending -> id=${windowId}`);
+                        return;
+                    }
+
+                    console.log(`${LOG_TAG} confirmation cancelled by user -> id=${windowId}`);
+                    utils.WindowData.cancelPendingWindow(windowId);
+                };
+
+                try {
+                    confirmOpen({ url: url, windowName: windowName }, proceed, cancel);
+                } catch (e) {
+                    console.error(`${LOG_TAG} EnjoylixConfirmOpen threw, treat as blocked`, e);
+                    utils.WindowData.resolvePendingWindow(windowId, null);
+                }
+            }
+
             if (typeof utils.DebugDump === "function") {
                 utils.DebugDump();
             }
@@ -232,7 +276,9 @@
                 return 1;
             }
 
-            const result = window.EnjoylixWebExternalServiceUtils.WindowData.checkWindowClosed(windowId) ? 1 : 0;
+            // 0 = open (or awaiting confirmation), 1 = closed, 2 = blocked after confirmation,
+            // 3 = confirmation cancelled by the user.
+            const result = window.EnjoylixWebExternalServiceUtils.WindowData.getWindowState(windowId);
             console.log(`${LOG_TAG} result -> ${result}`);
             return result;
         } catch (e) {

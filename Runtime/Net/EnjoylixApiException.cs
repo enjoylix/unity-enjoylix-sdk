@@ -56,6 +56,15 @@ namespace EnjoylixSDK.Net
 			: base("User closed the external browser or popup without completing the action.") { }
 	}
 
+	// WebGL only: the user declined the game's EnjoylixConfirmOpen confirmation, so the
+	// external window was never opened. Unlike UserDismissedException, nothing could have
+	// been paid, so no server-side reconciliation is attempted.
+	public sealed class UserCancelledException : Exception
+	{
+		public UserCancelledException()
+			: base("User cancelled opening the external window.") { }
+	}
+
 	public sealed class FlowTimeoutException : Exception
 	{
 		public string Context { get; }

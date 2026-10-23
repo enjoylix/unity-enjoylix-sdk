@@ -466,6 +466,27 @@ This event fires for all popup-using flows: authentication, purchase, and age ve
 
 Note: Popup blocking is most common on Safari (macOS / iOS) and when the action is not triggered directly from a user click.
 
+### Confirmation before opening (Safari)
+
+Safari only allows `window.open` inside a DOM click handler. A click on a Unity UI button does not count, and the purchase URL is only known after a network request, so Safari blocks the popup almost every time.
+
+To handle this, define `window.EnjoylixConfirmOpen` on the game page (WebGL template or your own `.jspre`). When `window.open` is blocked, the SDK calls it instead of failing right away:
+
+```js
+// request: { url, windowName } — windowName is "enjoylix_pay", "enjoylix_auth" or "enjoylix_age_verification"
+window.EnjoylixConfirmOpen = function (request, proceed, cancel) {
+    myOverlay.show(request);
+    myOverlay.onConfirm = function () { myOverlay.hide(); proceed(); }; // synchronously inside the click handler
+    myOverlay.onCancel  = function () { myOverlay.hide(); cancel(); };
+};
+```
+
+- The confirmation UI must be HTML: `proceed()` has to run synchronously in a DOM click handler. Calling it after `await`, `setTimeout` or from Unity will be blocked again.
+- `proceed()` opens the window and the flow continues as usual. `cancel()` ends it with `UserCancelledException` — the window was never opened, so for purchases no payment status check is made (unlike `UserDismissedException`).
+- Both are one-shot and are ignored once the flow has ended (timeout, cancellation).
+- If the hook is not defined, throws, or the window is still blocked after `proceed()`, the flow fails with `PopupBlockedException` and `OnPopupBlocked` fires, as before.
+- Browsers that don't block the popup never call the hook.
+
 ---
 
 # Deep Links

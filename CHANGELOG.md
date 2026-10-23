@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## [Unreleased]
+
+### Added
+- **`window.EnjoylixConfirmOpen` hook (WebGL)** — Safari blocks `window.open` outside a DOM user gesture, so purchase, auth and age-verification popups failed with `PopupBlockedException`. When the first `window.open` is blocked and the game page defines `window.EnjoylixConfirmOpen(request, proceed, cancel)`, the SDK calls it instead of failing: the game shows its own HTML confirmation and calls `proceed()` synchronously from the click handler, which opens the window inside the gesture. `cancel()` ends the flow with the new **`UserCancelledException`** — the window was never opened, so `PurchaseCreateAsync` rethrows it without the payment status check it does for `UserDismissedException`. Without the hook, a throwing hook, or a window still blocked after `proceed()`, the behaviour is unchanged: `PopupBlockedException` / `OnPopupBlocked`. Browsers that don't block the popup never see the hook.
+
+---
+
 ## [2.0.14] — Portal Environment Detection — 2026-09-11
 
 ### Fixed
