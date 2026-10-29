@@ -2,7 +2,9 @@ using System;
 using System.Text;
 using UnityEngine;
 using UnityEngine.UI;
+using EnjoylixSDK.Auth.Models;
 using EnjoylixSDK.Config;
+using EnjoylixSDK.Net;
 using EnjoylixSDK.Purchase.Models;
 using TMPro;
 
@@ -12,6 +14,8 @@ namespace EnjoylixSDK.Samples
     {
         [Header("Configuration")]
         [SerializeField] private EnjoylixConfig config;
+        [Tooltip("Platform string agreed with Enjoylix. Empty = Application.platform.")]
+        [SerializeField] private string platform;
 
         [Header("UI References - Auth")]
         [SerializeField] private Toggle toggleRandomDeviceId;
@@ -63,31 +67,42 @@ namespace EnjoylixSDK.Samples
                 return;
             }
 
-            _sdk = new EnjoylixSdk(config);
+            var platformId = string.IsNullOrEmpty(platform) ? Application.platform.ToString() : platform;
+            _sdk = new EnjoylixSdk(config, platformId);
 
             // 2. Subscribe to Events
-            _sdk.Auth.OnAuthStateChanged += UpdateAuthStateUI;
-            _sdk.Auth.OnAuthError += (e) => LogError($"Auth Error: {e.Message}");
-            _sdk.Auth.OnTokenReceived += (t) => Log($"Token received (len: {t.Length})");
-            _sdk.Auth.OnLoginCompleted += (kind, success, isRestore) => 
-                Log($"Login Completed: Kind={kind}, Success={success}, IsRestore={isRestore}");
-
-            // 3. Subscribe to Payment Events (Global Listener)
-            _sdk.PurchaseFlow.OnPaymentResult += (result) => 
+            _sdk.OnLoginCompleted += (kind, success) =>
             {
-                Log($"[Global Payment Listener] Success: {result.success}, ID: {result.payment_id}");
+                Log($"Login Completed: Kind={kind}, Success={success}");
+                UpdateAuthStateUI();
             };
+            _sdk.OnPopupBlocked += url => LogError($"Popup blocked, open it manually: {url}");
 
-            // 4. Async Init (Restores session if saved)
-            try
+            // 3. Load the stored session (synchronous, no network, does not log in)
+            _sdk.Initialize();
+            Log("SDK Initialized.");
+
+            // 4. Restore the stored session, if any.
+            // A real game would call _sdk.LoginOnStartAsync(deviceId) here instead — it restores
+            // the session or opens the browser login. The demo keeps login on the buttons.
+            if (!string.IsNullOrEmpty(_sdk.AccessToken))
             {
-                await _sdk.InitializeAsync();
-                Log("SDK Initialized.");
+                try
+                {
+                    await _sdk.EnsureValidTokenAsync();
+                    Log("Stored session restored.");
+                }
+                catch (InvalidOperationException)
+                {
+                    Log("Stored session expired, please log in again.");
+                }
+                catch (Exception e)
+                {
+                    LogError($"Session restore failed: {e.Message}");
+                }
             }
-            catch (Exception e)
-            {
-                LogError($"Init failed: {e.Message}");
-            }
+
+            UpdateAuthStateUI();
         }
 
         private void SetupButtons()
@@ -112,7 +127,7 @@ namespace EnjoylixSDK.Samples
             {
                 var idToUse = _currentDeviceId;
                 Log($"Using ID: {idToUse}");
-                var guestId = await _sdk.Auth.LoginGuestAsync(idToUse);
+                var guestId = await _sdk.LoginGuestAsync(idToUse);
                 Log($"Guest Login Success! ID: {guestId}");
             }
             catch (Exception e)
@@ -126,8 +141,10 @@ namespace EnjoylixSDK.Samples
             Log("Starting OpenID Login (Browser)...");
             try
             {
-                var session = await _sdk.Auth.LoginOpenIdAsync();
-                Log($"OpenID Login Success! User: {session.me.email}");
+                var session = await _sdk.LoginOpenIdAsync();
+                if (session == null) return; // popup blocked, OnPopupBlocked has fired
+
+                Log($"OpenID Login Success! User ID: {session.me?.id}");
             }
             catch (Exception e)
             {
@@ -142,8 +159,10 @@ namespace EnjoylixSDK.Samples
             {
                 var idToUse = _currentDeviceId;
                 Log($"Using ID: {idToUse}");
-                var session = await _sdk.Auth.LinkGuestAsync(idToUse);
-                Log($"Linking Success! Now User: {session.me.email}");
+                var session = await _sdk.LinkGuestAsync(idToUse);
+                if (session == null) return; // popup blocked, OnPopupBlocked has fired
+
+                Log($"Linking Success! Now User ID: {session.me?.id}");
             }
             catch (Exception e)
             {
@@ -153,8 +172,9 @@ namespace EnjoylixSDK.Samples
 
         private void OnLogoutClicked()
         {
-            _sdk.Auth.Logout();
+            _sdk.Logout();
             Log("Logged out.");
+            UpdateAuthStateUI();
         }
 
         #endregion
@@ -180,7 +200,11 @@ namespace EnjoylixSDK.Samples
             {
                 var result = await _sdk.PurchaseCreateAsync(request, TimeSpan.FromMinutes(5));
 
-                if (result.success)
+                if (result == null)
+                {
+                    Log("<color=orange>Purchase Not Started.</color> The payment window was blocked.");
+                }
+                else if (result.success)
                 {
                     Log($"<color=green>PURCHASE SUCCESS!</color> Payment ID: {result.payment_id}");
                 }
@@ -189,9 +213,26 @@ namespace EnjoylixSDK.Samples
                     Log($"<color=orange>Purchase Not Completed.</color> Reason: {result.error}");
                 }
             }
+            catch (UserDismissedException)
+            {
+                Log("<color=orange>Purchase Dismissed.</color> The player returned without paying.");
+            }
+            catch (UserCancelledException)
+            {
+                Log("<color=orange>Purchase Cancelled.</color> The player declined to open the payment window.");
+            }
+            catch (FlowTimeoutException e)
+            {
+                LogError($"Purchase timed out after {e.Timeout}.");
+            }
             catch (Exception e)
             {
                 LogError($"Purchase Exception: {e.Message}");
+            }
+            finally
+            {
+                // The purchase re-authenticates when there is no session, refresh the UI either way
+                UpdateAuthStateUI();
             }
         }
 
@@ -209,12 +250,12 @@ namespace EnjoylixSDK.Samples
         {
             string txId = Guid.NewGuid().ToString().Substring(0, 8);
             _sdk.TrackPurchase(
-                eventType: "purchase", 
-                source: "shop_gold_pack", 
-                checkoutId: "com.game.gold.100", 
-                transactionId: txId, 
-                amount: 4.99f, 
-                currencyCode: "USD", 
+                eventType: "purchase",
+                source: "shop_gold_pack",
+                checkoutId: "com.game.gold.100",
+                transactionId: txId,
+                amount: 4.99f,
+                currencyCode: "USD",
                 isQaPurchase: true
             );
             Log($"Event Sent: Purchase (Tx: {txId})");
@@ -224,28 +265,35 @@ namespace EnjoylixSDK.Samples
 
         #region UI Updates
 
-        private void UpdateAuthStateUI(EnjoylixSDK.Auth.Models.AuthState state)
+        private AuthState CurrentAuthState()
         {
+            if (string.IsNullOrEmpty(_sdk.AccessToken)) return AuthState.SignedOut;
+            return _sdk.IsEmailLogin ? AuthState.Authorized : AuthState.Guest;
+        }
+
+        private void UpdateAuthStateUI()
+        {
+            var state = CurrentAuthState();
             txtAuthState.text = $"State: {state}";
-            
-            bool isGuest = state == EnjoylixSDK.Auth.Models.AuthState.Guest;
-            bool isAuth = state == EnjoylixSDK.Auth.Models.AuthState.Authorized;
-            bool isSignedOut = state == EnjoylixSDK.Auth.Models.AuthState.SignedOut;
+
+            bool isGuest = state == AuthState.Guest;
+            bool isAuth = state == AuthState.Authorized;
+            bool isSignedOut = state == AuthState.SignedOut;
 
             btnGuestLogin.interactable = isSignedOut;
             btnOpenIdLogin.interactable = isSignedOut || isGuest;
             btnLinkGuest.interactable = isGuest;
             btnLogout.interactable = !isSignedOut;
 
-            btnBuyCoins.interactable = true; 
+            btnBuyCoins.interactable = true;
 
-            if (isAuth && _sdk.Auth.Me != null)
+            if (isAuth)
             {
-                txtUserInfo.text = $"User: {_sdk.Auth.Me.email}\nID: {_sdk.Auth.Me.id}";
+                txtUserInfo.text = $"User ID: {_sdk.EnjoylixId}";
             }
             else if (isGuest)
             {
-                txtUserInfo.text = $"Guest ID: {_sdk.Auth.GuestId}";
+                txtUserInfo.text = $"Guest ID: {_sdk.EnjoylixId}";
             }
             else
             {

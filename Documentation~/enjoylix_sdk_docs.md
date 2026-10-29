@@ -13,53 +13,25 @@ Unity SDK for integrating **Enjoylix OpenID authentication**, **Payments**, **Ag
 
 ### 1. Install the SDK
 
-Add the registry and dependency to `manifest.json`.
+Add the SDK to your `manifest.json` as a git dependency:
 
 ```json
 {
-  "scopedRegistries": [
-    {
-      "name": "PublicNPMRegistry",
-      "url": "https://nexus.playful-fairies.com/repository/npm-unity-public",
-      "scopes": ["com.enjoylix"],
-      "overrideBuiltIns": true
-    }
-  ],
   "dependencies": {
-    "com.enjoylix.sdk": "2.0.0"
+    "com.enjoylix.sdk": "https://github.com/enjoylix/unity-enjoylix-sdk.git#<tag>"
   }
 }
 ```
 
----
+Replace `<tag>` with any existing release tag from the repository's tags (e.g. `2.0.16`).
 
-### 2. Configure Registry Authentication
+Alternatively, in Unity: `Window → Package Manager → + → Add package from git URL…` and paste `https://github.com/enjoylix/unity-enjoylix-sdk.git#<tag>`.
 
-Create `.upmconfig.toml`
-
-**Windows**
-
-```
-%USERPROFILE%\.upmconfig.toml
-```
-
-**macOS / Linux**
-
-```
-~/.upmconfig.toml
-```
-
-Example:
-
-```toml
-[npmAuth."https://nexus.playful-fairies.com/repository/npm-unity-public"]
-_auth = "YOUR_TOKEN"
-alwaysAuth = true
-```
+> Unity needs a `git` executable available in `PATH`. The repository is public, no credentials are required.
 
 ---
 
-### 3. Create Config
+### 2. Create Config
 
 ```
 Assets → Create → Enjoylix → EnjoylixConfig
@@ -67,16 +39,27 @@ Assets → Create → Enjoylix → EnjoylixConfig
 
 Fill fields:
 
-- ProjectName
-- Environment (Dev / Prod)
+- ProjectName — your agreed project name
 - DeepLinkScheme (mobile)
+- Partner — partner identifier agreed with Enjoylix
+- CurrentEnvironment (Dev / Prod)
+- DevEnvironment / ProdEnvironment — references to `EnjoylixEnvironment` assets
+- StorageEncryptionSalt — unique random string that encrypts the stored refresh token; set it once and never change it in a shipped game, or every player is logged out
+- WebPortalMode (WebGL) — see [WebGL Portal Auto-Login](#webgl-portal-auto-login)
+
+Then create one environment asset per environment:
+
+```
+Assets → Create → Enjoylix → EnjoylixEnvironment
+```
+
 - BaseServiceUrl
 - AttributionServiceUrl
 - RequestSignSecret (per environment; replace the placeholder with the key issued by the Enjoylix team — it signs the purchase request)
 
 ---
 
-### 4. Initialize SDK
+### 3. Initialize SDK
 
 ```csharp
 public class EnjoylixBootstrap : MonoBehaviour
@@ -87,13 +70,15 @@ public class EnjoylixBootstrap : MonoBehaviour
 
     private void Awake()
     {
-        Sdk = new EnjoylixSdk(config, Application.platform.ToString());
+        Sdk = new EnjoylixSdk(config, "ENJOYLIX_ANDROID"); // the platform string agreed with Enjoylix
         Sdk.Initialize(); // restores saved session from PlayerPrefs
     }
 }
 ```
 
-The `platform` parameter is required. It is used by age verification and attribution to identify the runtime environment.
+`Initialize()` is synchronous and makes no network calls — it only loads a persisted session. It does not log the player in; call [`LoginOnStartAsync`](#login-on-startup-recommended) or another login method afterwards.
+
+The `platform` parameter is required. It is an arbitrary string agreed with the Enjoylix team, used by age verification and reported as the `platform` of every attribution event — see [Platform Filtering](#platform-filtering).
 
 You can also pass optional additional attribution context:
 
@@ -112,6 +97,18 @@ These values are automatically attached to guest login and guest → OpenID link
 ---
 
 # Authentication
+
+## Login on Startup (recommended)
+
+One call that covers every entry path: it restores a stored session if one is still usable, and otherwise hands off to the browser. Inside the Enjoylix web portal it routes to [`LoginOnStartWeb`](#webgl-portal-auto-login) automatically, so you do not need to branch on the platform yourself.
+
+```csharp
+string deviceId = SystemInfo.deviceUniqueIdentifier;
+
+var session = await EnjoylixBootstrap.Sdk.LoginOnStartAsync(deviceId);
+```
+
+---
 
 ## Guest Login
 
@@ -180,11 +177,28 @@ The mode only matters in WebGL player builds; the Editor and native platforms ar
 EnjoylixBootstrap.Sdk.Logout();
 ```
 
+Clears the session and stored tokens, and stops the session ping. The device id is kept, so a later guest login returns the same guest.
+
+---
+
+## Keeping the Token Valid
+
+Call `EnsureValidTokenAsync()` before any request of your own that carries the token. The check is local — a valid token costs no network round trip — and an expired one is renewed with the refresh token.
+
+```csharp
+var session = await EnjoylixBootstrap.Sdk.EnsureValidTokenAsync();
+// session.accessToken is now guaranteed fresh
+```
+
+`PurchaseCreateAsync`, `IsAgeVerificationNeededAsync` and `StartAgeVerificationAsync` call it internally.
+
+When a full (OpenID) session can no longer be renewed, `EnsureValidTokenAsync()` clears the stored tokens and throws `InvalidOperationException`. The SDK does not reopen the browser on its own — catch it and show your own login screen. Guest sessions re-login automatically.
+
 ---
 
 # Payments
 
-Payments are processed through a browser flow similar to authentication.
+Payments are processed through a browser flow similar to authentication. Purchases are available to all users, including guests.
 
 ---
 
@@ -211,6 +225,12 @@ PaymentResult result = await EnjoylixBootstrap.Sdk.PurchaseCreateAsync(
 Handle result:
 
 ```csharp
+if (result == null)
+{
+    // The browser blocked the payment window — OnPopupBlocked has fired
+    return;
+}
+
 if (result.success)
 {
     Debug.Log($"Purchase successful! Payment ID: {result.payment_id}");
@@ -356,13 +376,11 @@ catch (OperationCanceledException)
 
 # Attribution
 
-SDK automatically tracks:
+The SDK automatically sends only one event:
 
-- login
-- registration
 - ping — session heartbeat, starts once the game has called `SetPlayerId()` on an authenticated session (any entry path) and then repeats every 6 hours while the game is running
-- purchases
-- tutorial completion
+
+`login`, `registration`, `tutorial:complete` and purchase events are **not** sent automatically. Call `TrackLogin()`, `TrackRegistration()`, `TrackTutorialComplete()` and `TrackPurchase()` yourself for the client-side fallback — see [Manual tracking](#manual-tracking).
 
 ## Launch query parameters
 
@@ -403,9 +421,11 @@ Enjoylix auth  →  game resolves its profile  →  SetPlayerId()  →  first pi
 
 The session `ping` waits for `SetPlayerId()` and is sent on that call — nothing goes out before it, since a `ping` without `player_id` is not usable on the backend. After that it repeats every 6 hours on its own.
 
-Manual tracking:
+## Manual tracking
 
 ```csharp
+EnjoylixBootstrap.Sdk.TrackLogin();
+EnjoylixBootstrap.Sdk.TrackRegistration();
 EnjoylixBootstrap.Sdk.TrackTutorialComplete();
 
 EnjoylixBootstrap.Sdk.TrackPurchase(
@@ -434,12 +454,17 @@ catch (UserDismissedException)
 {
     // User returned to the app without completing the flow
 }
+catch (FlowTimeoutException e)
+{
+    // The browser flow returned no result in time (e.Context, e.Timeout)
+}
 catch (OperationCanceledException)
 {
-    // Timed out or CancellationToken was triggered
+    // CancellationToken was triggered
 }
 catch (EnjoylixApiException e)
 {
+    // Also catches EnjoylixNetworkException (transient failure after all retries)
     Debug.LogError($"API error {e.StatusCode}: {e.Message}");
 }
 catch (Exception e)
@@ -447,6 +472,17 @@ catch (Exception e)
     Debug.LogException(e);
 }
 ```
+
+| Exception | Raised when |
+|---|---|
+| `UserDismissedException` | The player closed the browser without finishing a purchase or verification. For purchases the SDK has already confirmed with the server that no payment completed. |
+| `UserCancelledException` | WebGL only — the player declined your `EnjoylixConfirmOpen` dialog, so the window was never opened. See [Confirmation before opening](#confirmation-before-opening-safari). |
+| `FlowTimeoutException` | A browser flow returned no result in time — 5 minutes for `LoginOpenIdAsync` / `LinkGuestAsync` / `LoginOnStartAsync`, 2 minutes for `LoginOnStartWeb`. |
+| `EnjoylixNetworkException` | A request ran out of retries for a transient reason. Derives from `EnjoylixApiException`; `Attempts` says how many were made. |
+| `EnjoylixApiException` | The backend answered with an error status. `StatusCode`, `ResponseBody` and `ValidationError` carry the detail. |
+| `InvalidOperationException` | A full (OpenID) session can no longer be renewed. Stored tokens have already been cleared. |
+
+Transient network failures (connection errors, timeouts, `429`, `5xx`) on guest login, `me` and the token request are retried up to three times inside the SDK. A `401` on `PurchaseCreateAsync` or `IsAgeVerificationNeededAsync` triggers one silent session refresh and a single repeat.
 
 ## Popup Blocking
 
@@ -462,7 +498,7 @@ EnjoylixBootstrap.Sdk.OnPopupBlocked += url =>
 };
 ```
 
-This event fires for all popup-using flows: authentication, purchase, and age verification.
+This event fires for all popup-using flows: authentication, purchase, and age verification. The call itself does not throw: `LoginOpenIdAsync`, `LinkGuestAsync`, `LoginOnStartAsync` and `PurchaseCreateAsync` return `null`, and `StartAgeVerificationAsync` returns `false`.
 
 Note: Popup blocking is most common on Safari (macOS / iOS) and when the action is not triggered directly from a user click.
 

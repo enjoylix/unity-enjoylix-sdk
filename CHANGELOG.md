@@ -1,9 +1,16 @@
 # CHANGELOG
 
-## [Unreleased]
+## [2.0.16] — Confirmation for Blocked Popups — 2026-10-23
 
 ### Added
 - **`window.EnjoylixConfirmOpen` hook (WebGL)** — Safari blocks `window.open` outside a DOM user gesture, so purchase, auth and age-verification popups failed with `PopupBlockedException`. When the first `window.open` is blocked and the game page defines `window.EnjoylixConfirmOpen(request, proceed, cancel)`, the SDK calls it instead of failing: the game shows its own HTML confirmation and calls `proceed()` synchronously from the click handler, which opens the window inside the gesture. `cancel()` ends the flow with the new **`UserCancelledException`** — the window was never opened, so `PurchaseCreateAsync` rethrows it without the payment status check it does for `UserDismissedException`. Without the hook, a throwing hook, or a window still blocked after `proceed()`, the behaviour is unchanged: `PopupBlockedException` / `OnPopupBlocked`. Browsers that don't block the popup never see the hook.
+
+---
+
+## [2.0.15] — Public GitHub Repository — 2026-10-09
+
+### Changed
+- **The SDK is published to the public GitHub repository** `https://github.com/enjoylix/unity-enjoylix-sdk` — install it as a git dependency pinned to a release tag (`https://github.com/enjoylix/unity-enjoylix-sdk.git#<tag>`). No registry or credentials are required. No code changes.
 
 ---
 
@@ -184,6 +191,13 @@
 - All SDK methods are now exposed directly on `EnjoylixSdk` — `sdk.Auth.X` / `sdk.Purchase.X` no longer exist.
 - Popup blocking unified into a single `OnPopupBlocked` event on `EnjoylixSdk`.
 - `Initialize()` is now synchronous.
+
+### Removed
+- **`EnjoylixSdk(EnjoylixConfig config, Dictionary<string, string> additionalAttributionContext = null)`** (callable as `new EnjoylixSdk(config)`) — use `EnjoylixSdk(EnjoylixConfig config, string platform, Dictionary<string, string> additionalAttributionContext = null)`.
+- **`InitializeAsync()`** — replaced by the synchronous `Initialize()`, which only loads the stored session and does not log in.
+- **`EnsureEmailLoginAsync()`** — purchases are available to guests as well. To offer a guest a full account, check `IsEmailLogin` and call `LinkGuestAsync`.
+- **`EnjoylixSdk.Auth`, `Purchase`, `PurchaseFlow`, `PurchaseClient`, `AgeVerificationFlow`, `AgeVerificationClient`** — the public API is on `EnjoylixSdk` itself.
+- **`OpenIdUserResponse.email`** — the user model (`AuthSession.me`) no longer carries the email; use `id` / `EnjoylixId` to identify the player.
 
 ---
 

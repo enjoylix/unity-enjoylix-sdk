@@ -13,6 +13,7 @@ The sample scene is pre-configured with a UI controller that interacts with the 
 3.  **Check Configuration**:
    *   Select the **DemoController** object inside the **Canvas**.
    *   Ensure the `Config` field in the inspector is assigned with the provided **EnjoylixConfig** asset.
+   *   Optionally fill the `Platform` field with the platform string agreed with Enjoylix. When empty, `Application.platform` is used.
    *   *Note: If the TextMeshPro components are missing visually, please import "TMP Essentials" via `Window > TextMeshPro > Import TMP Essentials`.*
 
 ## Features & UI Controls
@@ -29,14 +30,15 @@ The left column controls the user session.
    *   **Unchecked (Default)**: Uses `SystemInfo.deviceUniqueIdentifier`. This simulates a real user on a specific device.
    *   **Checked**: Uses a randomly generated UUID (GUID).
    *   *Logic*: The random ID is generated once when the scene starts. Toggling this allows you to switch between testing a "Real Device" and a "Fresh User" without clearing PlayerPrefs or changing devices.
+*   **On start**: the demo calls `Initialize()` and, if a session was stored, restores it with `EnsureValidTokenAsync()`. A real game would call `LoginOnStartAsync(deviceId)` instead, which also opens the browser login when there is no session.
 *   **Guest Login**:
    *   Creates an anonymous session using the selected Device ID.
-   *   Updates the **Status Text** to `Guest` and shows the Guest ID.
+   *   Updates the **Status Text** to `Guest` and shows the Enjoylix ID.
 *   **Standard Login (OpenID)**:
    *   Initiates the browser-based login flow.
    *   On Mobile: Redirects back to the app via Deep Link.
    *   On WebGL: Communicates via window messages.
-   *   In Editor: Opens the browser (requires manual [Deep Link Simulator](https://docs.google.com/document/d/1eqCjBolaVDt3eQUXsceUA0pbLgCyEEztNf9kpT_bcr0/edit?tab=t.0#heading=h.5y1snagpjmi5) tool to complete).
+   *   In Editor: Opens the browser (requires manual [Deep Link Simulator](https://github.com/enjoylix/unity-enjoylix-sdk#deep-link-simulation-editor-only) tool to complete).
 *   **Link Guest**:
    *   Active only when logged in as a Guest.
    *   Links the current anonymous progress to a permanent OpenID account.
@@ -49,9 +51,8 @@ The middle column controls In-App Purchases.
 
 *   **Buy 100 Coins**:
     *   Initiates a purchase flow for a virtual item.
-    *   **Logic**:
-        1. Checks if the user is logged in via Email. If not (Guest), it **automatically triggers** the OpenID Login flow first.
-        2. Creates a transaction and opens the payment page in the browser.
+    *   **Logic**: Creates a transaction and opens the payment page in the browser. Purchases work for guests as well, no OpenID login is required.
+    *   The log shows the outcome: success, not completed, dismissed (`UserDismissedException`), cancelled (`UserCancelledException`, WebGL) or blocked window (`null` result).
     *   **Editor Testing**: Like login, the browser will redirect to a URL containing the result (e.g., `enjoylix://...?success=true&payment_id=...`). You must copy this URL into the **Deep Link Simulator** to complete the purchase in the Editor.
 
 ### 3. Attribution
@@ -65,7 +66,7 @@ The right column demonstrates event tracking.
 ### 4. Feedback
 
 *   **Status Text**: Shows the current Auth State (`SignedOut`, `Guest`, `Authorized`).
-*   **User Info Text**: Displays the User Email/ID (if authorized) or Guest ID.
+*   **User Info Text**: Displays the Enjoylix user ID (`EnjoylixId`) of the full account or the guest.
 *   **Log View**: The scrollable area at the bottom displays real-time SDK logs, token reception events, and error messages.
 
 ## Configuration Details
@@ -82,5 +83,5 @@ The sample includes pre-configured assets located in the sample folder:
 
 ## Testing Notes
 
-*   **Editor Testing**: When using **Standard Login** in the Unity Editor, the browser will open the login page. Since the Editor cannot automatically intercept custom URL schemes (Deep Links), the process may hang on the browser side. You may need to use a [Deep Link Simulator](https://docs.google.com/document/d/1eqCjBolaVDt3eQUXsceUA0pbLgCyEEztNf9kpT_bcr0/edit?tab=t.0#heading=h.5y1snagpjmi5) tool or copy the token manually for debugging.
+*   **Editor Testing**: When using **Standard Login** in the Unity Editor, the browser will open the login page. Since the Editor cannot automatically intercept custom URL schemes (Deep Links), the process may hang on the browser side. You may need to use a [Deep Link Simulator](https://github.com/enjoylix/unity-enjoylix-sdk#deep-link-simulation-editor-only) tool or copy the token manually for debugging.
 *   **Mobile Testing**: Ensure your `DeepLinkScheme` matches the scheme defined in your Project Settings (Android Manifest / iOS URL Types) for redirects to work correctly.

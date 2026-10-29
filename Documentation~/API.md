@@ -23,8 +23,10 @@ EnjoylixSdk(EnjoylixConfig config, string platform, Dictionary<string, string> a
 | Parameter | Type | Description |
 | :---- | :---- | :---- |
 | `config` | `EnjoylixConfig` | ScriptableObject with project/environment settings |
-| `platform` | `string` | Runtime platform string (e.g. `"ANDROID"`, `"IOS"`, `"WEBGL"`, `"UNITY_EDITOR"`) |
+| `platform` | `string` | Required. Platform string agreed with Enjoylix (e.g. `"ENJOYLIX_ANDROID"`, `"ANDROID_SELF"`, `"web_enjoylix"`). Used by age verification and reported as `platform` on attribution events. Throws `ArgumentException` if null or empty |
 | `additionalAttributionContext` | `Dictionary<string, string>` | Optional extra key-value pairs attached to attribution events |
+
+> The single-argument constructor `EnjoylixSdk(EnjoylixConfig config)` was removed in 2.0.0.
 
 ---
 
@@ -36,6 +38,7 @@ EnjoylixSdk(EnjoylixConfig config, string platform, Dictionary<string, string> a
 | `IsKnownFullAccount` | `bool` | `true` if the persisted `is_guest` flag is `false` — the device was previously linked to a full account. Available before a session is established. |
 | `EnjoylixId` | `string` | User ID from the Enjoylix backend (`null` if not logged in) |
 | `AccessToken` | `string` | Current JWT access token (`null` if not logged in) |
+| `IsWebPortal` | `bool` | `true` when the WebGL build runs inside the Enjoylix portal, as decided by `EnjoylixConfig.WebPortalMode`. Always `false` in the Editor and on native platforms |
 
 ---
 
@@ -61,23 +64,41 @@ Fired after any login attempt. Second argument is `true` on success, `false` on 
 void Initialize()
 ```
 
-Restores the saved session from `PlayerPrefs` (device ID, guest ID, access token). Call once on startup before any other SDK method.
+Restores the saved session from `PlayerPrefs` (device ID, guest ID, tokens). Synchronous, makes no network calls and does not log the player in. Call once on startup before any other SDK method, then call a login method (usually `LoginOnStartAsync`).
+
+> `Task InitializeAsync()` was removed in 2.0.0 — use `Initialize()` followed by `LoginOnStartAsync`.
 
 ```csharp
 void Logout()
 ```
 
-Clears the current session (token, user info) and removes persisted data.
+Clears the current session (token, user info) and removes persisted data. Stops the session `ping`. The device id is kept.
 
 ```csharp
 Task<AuthSession> EnsureValidTokenAsync(CancellationToken ct = default)
 ```
 
-Validates the current token against the server. For guest sessions, re-authenticates automatically. For OpenID sessions, clears stored tokens and throws `InvalidOperationException` if expired — the caller must handle this and prompt the user to log in again. Serializes concurrent calls — safe to call in parallel.
+Returns a session with a usable access token. Validity is checked locally from the token's `exp`, so a valid token costs no network round trip; an expired one is renewed with the refresh token. For guest sessions, re-authenticates automatically. For OpenID sessions that can no longer be renewed, clears stored tokens and throws `InvalidOperationException` — the caller must handle this and prompt the user to log in again. Serializes concurrent calls — safe to call in parallel.
+
+```csharp
+Task<string> CreateGameSessionTicketAsync(CancellationToken ct = default)
+```
+
+Returns a one-time ticket your game backend can validate to confirm which Enjoylix account the client belongs to. The ticket expires after ~60 seconds and is burned on first validation — request it immediately before sending it, never cache or reuse it.
 
 ---
 
 ### Authentication Methods
+
+When the browser blocks the login window (WebGL), `LoginOnStartAsync`, `LoginOpenIdAsync` and `LinkGuestAsync` return `null` and `OnPopupBlocked` fires — they do not throw `PopupBlockedException`.
+
+```csharp
+Task<AuthSession> LoginOnStartAsync(string deviceId, CancellationToken ct = default)
+```
+
+Recommended startup login. Restores a stored session if it is still usable, otherwise hands off to the browser. On the Enjoylix portal (`IsWebPortal`) it calls `LoginOnStartWeb` instead. Raises `OnLoginCompleted` with `LoginKind.StartupLogin`. Timeout is 5 minutes (2 minutes on the portal).
+
+---
 
 ```csharp
 Task<string> LoginGuestAsync(string deviceId)
@@ -130,7 +151,11 @@ Task<PaymentResult> PurchaseCreateAsync(
     CancellationToken ct = default)
 ```
 
-Ensures a valid token, creates a transaction, opens the payment UI in the browser, and waits for the result via deep link or post message.
+Ensures a valid token, creates a transaction, opens the payment UI in the browser, and waits for the result via deep link or post message. Available to guest and full accounts.
+
+Returns `null` if the browser blocked the payment window (`OnPopupBlocked` fires). Throws `UserDismissedException` if the player returned without paying (after the SDK confirmed the status with the server), and `UserCancelledException` if the player declined the `EnjoylixConfirmOpen` dialog (WebGL).
+
+> `Task<bool> EnsureEmailLoginAsync()` was removed in 2.0.0 — purchases are available to guests as well. To offer a guest a full account, check `IsEmailLogin` and call `LinkGuestAsync`.
 
 ---
 
@@ -160,7 +185,7 @@ Returns `false` when:
 
 Throws `UserDismissedException` if the user closes the browser without completing verification — on mobile, Editor, and WebGL (popup closed before result arrives).
 
-Throws `OperationCanceledException` on timeout or token cancellation.
+Throws `FlowTimeoutException` on timeout in WebGL builds, `OperationCanceledException` on timeout on mobile / Editor or on token cancellation.
 
 > `PopupBlockedException` is handled internally — it is never thrown from this method.
 
@@ -334,8 +359,8 @@ public class AuthSession
 public class OpenIdUserResponse
 {
     public string id;
-    public string email;
     public bool is_guest;
+    public bool age_verified;
 }
 ```
 
@@ -367,6 +392,7 @@ GuestLogin    // LoginGuestAsync completed
 OpenIdLogin   // LoginOpenIdAsync completed
 GuestLink     // LinkGuestAsync completed
 TokenLogin    // PerformLoginWithTokenAsync completed
+StartupLogin  // LoginOnStartAsync completed
 ```
 
 ---
@@ -384,12 +410,17 @@ catch (UserDismissedException)
 {
     // User returned to the app without completing the flow
 }
+catch (FlowTimeoutException e)
+{
+    // WebGL: the browser flow returned no result in time (e.Context, e.Timeout)
+}
 catch (OperationCanceledException)
 {
-    // Timed out or CancellationToken was triggered
+    // Timed out (mobile / Editor) or CancellationToken was triggered
 }
 catch (EnjoylixApiException e)
 {
+    // Also catches EnjoylixNetworkException
     Debug.LogError($"API error {e.StatusCode}: {e.Message}");
 }
 catch (Exception e)
@@ -403,10 +434,13 @@ catch (Exception e)
 | Type | When thrown |
 | :---- | :---- |
 | `UserDismissedException` | User closed the browser without completing the flow (mobile, Editor, and WebGL) |
-| `PopupBlockedException` | Browser blocked the popup window before it could open (WebGL) |
 | `UserCancelledException` | User declined the game's `EnjoylixConfirmOpen` confirmation, the window was never opened (WebGL) |
-| `OperationCanceledException` | Timeout elapsed or `CancellationToken` was canceled |
+| `FlowTimeoutException` | A browser flow returned no result in time (WebGL). `Context` names the flow (`enjoylix_auth`, `enjoylix_pay`, `enjoylix_age_verification`, `portal_login`), `Timeout` is the elapsed interval |
+| `OperationCanceledException` | Timeout elapsed (mobile / Editor) or `CancellationToken` was canceled |
+| `EnjoylixNetworkException` | A request ran out of retries for a transient reason (connection error, timeout, `429`, `5xx`). Derives from `EnjoylixApiException`; exposes `Attempts` |
 | `EnjoylixApiException` | HTTP error from the backend; exposes `StatusCode`, raw body, and optional `ValidationError` |
+| `InvalidOperationException` | `EnsureValidTokenAsync` could not renew a full (OpenID) session; stored tokens were cleared |
+| `PopupBlockedException` | Not thrown from public methods — a blocked window is reported through `OnPopupBlocked`, and the call returns `null` / `false` |
 
 ### OnPopupBlocked Event
 
